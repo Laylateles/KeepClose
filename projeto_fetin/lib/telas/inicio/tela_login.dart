@@ -136,24 +136,6 @@ class _TelaLoginState extends State<TelaLogin> {
 
           child: Column(
             children: [
-              //tudo deve estar aqui dentro
-              //--------------------------------------------------------------------------
-              /* Align( -- comentei o icone que tinha a esquerda
-                //botão da esquerda
-                alignment: Alignment.centerLeft,
-                child: IconButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
-                  icon: const Icon(
-                    Icons.arrow_back_ios,
-                    size: 18,
-                  ),
-                ),
-              ),
-            
-              const SizedBox(height: 20),*/
-              //--------------------------------------------------------------------------------
               Center(
                 // logo do aplicativo
                 child: Row(

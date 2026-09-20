@@ -6,6 +6,7 @@ import '../../servicos/bluetooth_service.dart';
 import 'dart:async';
 import '../modelo/usuario_modelo.dart';
 import '../../dados/banco_dados.dart';
+import 'dart:math';
 
 //alterando o construtor para receber um usuário
 class TelaHome extends StatefulWidget {
@@ -18,31 +19,48 @@ class TelaHome extends StatefulWidget {
 }
 
 class _TelaHomeState extends State<TelaHome> {
+  final Map<String, List<int>> historicoRssi = {};
+  final Map<String, double> distancias = {};
   final List<DispositivoModelo> dispositivos =
       []; //guarda temporariamente os nomes adicionados
   final BluetoothServiceKeepClose bluetooth =
       BluetoothServiceKeepClose.instancia;
-
   Future<void> carregarDispositivos() async {
-    final usuarioId = widget.usuario.id;
+  final usuarioId = widget.usuario.id;
 
-    if (usuarioId == null) {
-      return;
-    }
-
-    final dispositivosSalvos = await BancoDados.instancia
-        .buscarDispositivosDoUsuario(usuarioId);
-
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {
-      dispositivos
-        ..clear()
-        ..addAll(dispositivosSalvos);
-    });
+  if (usuarioId == null) {
+    return;
   }
+
+  final dispositivosSalvos = await BancoDados.instancia
+      .buscarDispositivosDoUsuario(usuarioId);
+
+  // Estar salvo no banco não significa estar conectado agora.
+  for (final dispositivo in dispositivosSalvos) {
+    dispositivo.conectado = false;
+    dispositivo.rssi = null;
+    dispositivo.proximidade = "Fora de alcance";
+  }
+
+  if (!mounted) {
+    return;
+  }
+
+  setState(() {
+    dispositivos
+      ..clear()
+      ..addAll(dispositivosSalvos);
+  });
+
+  // Depois de carregar na tela, tenta recuperar a conexão BLE.
+  for (final dispositivo in dispositivosSalvos) {
+    await bluetooth.reconectarPorId(
+      dispositivo.idBluetooth,
+    );
+
+    monitorarConexao(dispositivo);
+  }
+}
 
   String classificarSinal(int rssi) {
     if (rssi >= -55) {
@@ -60,32 +78,97 @@ class _TelaHomeState extends State<TelaHome> {
     return "Crítico";
   }
 
-  Future<void> atualizarRssi(DispositivoModelo dispositivo) async {
-    if (!dispositivo.conectado) {
-      return;
+  int suavizarRssi(
+    String idBluetooth,
+    int novoRssi,
+  ) {
+    final historico = historicoRssi.putIfAbsent(
+      idBluetooth,
+      () => [],
+    );
+
+    historico.add(novoRssi);
+
+    // Mantém somente as últimas 5 leituras.
+    if (historico.length > 5) {
+      historico.removeAt(0);
     }
 
-    final rssi = await bluetooth.lerRssiPorId(dispositivo.idBluetooth);
+    final soma =
+        historico.reduce((a, b) => a + b);
 
-    if (!mounted) {
-      return;
-    }
-
-    if (rssi == null) {
-      setState(() {
-        dispositivo.rssi = null;
-        dispositivo.proximidade = "Aguardando sinal";
-      });
-
-      return;
-    }
-
-    setState(() {
-      dispositivo.rssi = rssi;
-      dispositivo.proximidade = classificarSinal(rssi);
-      dispositivo.ultimaConexao = "Agora";
-    });
+    return (soma / historico.length).round();
   }
+
+  double calcularDistancia(int rssi) {
+  const double rssiReferencia = -72.0;
+  const double fatorAmbiente = 2.1;
+
+  final expoente =
+      (rssiReferencia - rssi) /
+      (10 * fatorAmbiente);
+
+  final distancia = pow(10, expoente);
+
+  return distancia.toDouble();
+}
+
+  Future<void> atualizarRssi(
+  DispositivoModelo dispositivo,
+) async {
+  if (!dispositivo.conectado) {
+    return;
+  }
+
+  final rssi = await bluetooth.lerRssiPorId(
+    dispositivo.idBluetooth,
+  );
+
+  if (!mounted) {
+    return;
+  }
+
+  if (rssi == null) {
+    setState(() {
+      dispositivo.rssi = null;
+      dispositivo.proximidade = "Aguardando sinal";
+
+      distancias.remove(
+        dispositivo.idBluetooth,
+      );
+    });
+
+    return;
+  }
+
+  final rssiSuavizado = suavizarRssi(
+    dispositivo.idBluetooth,
+    rssi,
+  );
+
+  final distancia = calcularDistancia(
+    rssiSuavizado,
+  );
+
+  print(
+    "RSSI ${dispositivo.nome}: "
+    "bruto=$rssi | "
+    "suavizado=$rssiSuavizado dBm | "
+    "distância=${distancia.toStringAsFixed(2)} m",
+  );
+
+  setState(() {
+    dispositivo.rssi = rssiSuavizado;
+
+    distancias[dispositivo.idBluetooth] =
+        distancia;
+
+    dispositivo.proximidade =
+        classificarSinal(rssiSuavizado);
+
+    dispositivo.ultimaConexao = "Agora";
+  });
+}
 
   void monitorarConexao(DispositivoModelo dispositivo) {
     final stream = bluetooth.monitorarConexaoPorId(dispositivo.idBluetooth);
@@ -108,12 +191,17 @@ class _TelaHomeState extends State<TelaHome> {
         if (!conectado) {
           dispositivo.rssi = null;
           dispositivo.proximidade = "Fora de alcance";
+
+          historicoRssi.remove(
+            dispositivo.idBluetooth,
+          );
         }
       });
     });
   }
 
   Timer? timerRssi;
+  Timer? timerReconexao;
   void iniciarMonitoramentoRssi() {
     timerRssi = Timer.periodic(const Duration(seconds: 2), (timer) async {
       for (final dispositivo in dispositivos) {
@@ -122,18 +210,41 @@ class _TelaHomeState extends State<TelaHome> {
     });
   }
 
+  void iniciarMonitoramentoReconexao() {
+  timerReconexao = Timer.periodic(
+    const Duration(seconds: 5),
+    (timer) async {
+      for (final dispositivo in dispositivos) {
+        if (!dispositivo.conectado) {
+          print(
+            "Tentando reconectar automaticamente: ${dispositivo.nome}",
+          );
+
+          await bluetooth.reconectarPorId(
+            dispositivo.idBluetooth,
+          );
+
+          monitorarConexao(dispositivo);
+        }
+      }
+    },
+  );
+}
+
   @override
   void initState() {
     super.initState();
     carregarDispositivos();
-    // Temporariamente desativado para testar
-    // somente o estado da conexão BLE.
-    //iniciarMonitoramentoRssi();
+
+
+    iniciarMonitoramentoReconexao();
+    iniciarMonitoramentoRssi();
   }
 
   @override
   void dispose() {
     timerRssi?.cancel();
+    timerReconexao?.cancel();
     super.dispose();
   }
 
@@ -302,21 +413,19 @@ class _TelaHomeState extends State<TelaHome> {
                                       ),
                                       const SizedBox(height: 10),
 
-                                      Text("Distância: Calculando..."),
+                                      Text(
+                                          dispositivo.conectado &&
+                                                  distancias[dispositivo.idBluetooth] != null
+                                              ? "Distância aproximada: "
+                                                "${distancias[dispositivo.idBluetooth]!.toStringAsFixed(2)} m"
+                                              : "Distância aproximada: Fora de alcance",
+                                        ),
 
                                       const SizedBox(height: 6),
 
                                       Text(
                                         "Última conexão: ${dispositivo.ultimaConexao}",
                                       ),
-                                      const SizedBox(height: 6),
-
-                                      Text(
-                                        dispositivo.rssi != null
-                                            ? "Sinal: ${dispositivo.rssi} dBm"
-                                            : "Sinal: aguardando...",
-                                      ),
-
                                       const SizedBox(height: 6),
 
                                       Text(

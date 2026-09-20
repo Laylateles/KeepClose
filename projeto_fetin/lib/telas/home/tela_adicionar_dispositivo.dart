@@ -35,20 +35,25 @@ class _TelaAdicionarDispositivoState extends State<TelaAdicionarDispositivo> {
         FlutterBluePlus.adapterStateNow == BluetoothAdapterState.on;
     iniciarBusca();
 
-    assinaturaBluetooth = FlutterBluePlus.adapterState.listen((estado) {
-      if (!mounted) {
-        return;
-      }
-      final ligado = estado == BluetoothAdapterState.on;
+  assinaturaBluetooth =
+      FlutterBluePlus.adapterState.listen((estado) {
+    if (!mounted) {
+      return;
+    }
 
-      setState(() {
-        bluetoothLigado = ligado;
-      });
+    final ligado =
+        estado == BluetoothAdapterState.on;
 
-      if (ligado) {
-        iniciarBusca();
-      }
+    setState(() {
+      bluetoothLigado = ligado;
     });
+
+    if (ligado) {
+      iniciarBusca();
+    } else {
+      bluetooth.pararBusca();
+    }
+  });
   }
 
   Future<void> iniciarBusca() async {
@@ -208,6 +213,9 @@ class _TelaAdicionarDispositivoState extends State<TelaAdicionarDispositivo> {
               StreamBuilder<List<ScanResult>>(
                 stream: bluetooth.resultadosScan,
                 builder: (context, snapshot) {
+                  if (!bluetoothLigado) {
+                    return const SizedBox.shrink();
+                  }
                   final resultados = snapshot.data ?? [];
 
                   for (final resultado in resultados) {
