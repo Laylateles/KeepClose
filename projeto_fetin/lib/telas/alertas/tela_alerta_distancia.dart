@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:vibration/vibration.dart';
 import 'package:audioplayers/audioplayers.dart';
+import '../../servicos/configuracoes_alerta_service.dart';
 
 class TelaAlertaDistancia extends StatefulWidget {
   final String nomeDispositivo;
@@ -30,36 +31,53 @@ class _TelaAlertaDistanciaState
   }
 
   Future<void> iniciarAlerta() async {
+    // Carrega as escolhas que o usuário fez
+    // na tela de configurações.
+    final somLigado =
+        await ConfiguracoesAlertaService.carregarSom();
+
+    final vibracaoLigada =
+        await ConfiguracoesAlertaService.carregarVibracao();
+
+    if (!mounted) {
+      return;
+    }
+
     // -------------------------
     // VIBRAÇÃO
     // -------------------------
 
-    final possuiVibrador =
-        await Vibration.hasVibrator();
+    // Só vibra se o usuário deixou
+    // a opção de vibração ligada.
+    if (vibracaoLigada) {
+      final possuiVibrador =
+          await Vibration.hasVibrator();
 
-    if (possuiVibrador) {
-      Vibration.vibrate(
-        pattern: [0, 700, 500, 700],
-        repeat: 0,
-      );
+      if (possuiVibrador) {
+        Vibration.vibrate(
+          pattern: [0, 700, 500, 700],
+          repeat: 0,
+        );
+      }
     }
 
     // -------------------------
     // SOM
     // -------------------------
 
-    // Faz o áudio repetir continuamente.
-    await audioPlayer.setReleaseMode(
-      ReleaseMode.loop,
-    );
+    // Só toca o áudio se o usuário
+    // deixou o som ligado.
+    if (somLigado) {
+      await audioPlayer.setReleaseMode(
+        ReleaseMode.loop,
+      );
 
-    // Toca o arquivo que está dentro de:
-    // assets/audios/alerta_keepclose.wav
-    await audioPlayer.play(
-      AssetSource(
-        'audios/alerta_keepclose.wav',
-      ),
-    );
+      await audioPlayer.play(
+        AssetSource(
+          'audios/alerta_keepclose.wav',
+        ),
+      );
+    }
   }
 
   Future<void> pararAlerta() async {
