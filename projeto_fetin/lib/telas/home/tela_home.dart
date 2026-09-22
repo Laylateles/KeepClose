@@ -39,37 +39,52 @@ class _TelaHomeState extends State<TelaHome> {
   // um monitor de conexão ativo.
   final Set<String> dispositivosMonitorados = {};
   Future<void> carregarDispositivos() async {
-    final usuarioId = widget.usuario.id;
+    try {
+      final usuarioId = widget.usuario.id;
 
-    if (usuarioId == null) {
-      return;
-    }
+      if (usuarioId == null) {
+        return;
+      }
 
-    final dispositivosSalvos = await BancoDados.instancia
-        .buscarDispositivosDoUsuario(usuarioId);
+      final dispositivosSalvos = await BancoDados.instancia
+          .buscarDispositivosDoUsuario(usuarioId);
 
-    // Estar salvo no banco não significa estar conectado agora.
-    for (final dispositivo in dispositivosSalvos) {
-      dispositivo.conectado = false;
-      dispositivo.rssi = null;
-      dispositivo.proximidade = "Fora de alcance";
-    }
+      for (final dispositivo in dispositivosSalvos) {
+        dispositivo.conectado = false;
+        dispositivo.rssi = null;
+        dispositivo.proximidade = "Fora de alcance";
+      }
 
-    if (!mounted) {
-      return;
-    }
+      if (!mounted) {
+        return;
+      }
 
-    setState(() {
-      dispositivos
-        ..clear()
-        ..addAll(dispositivosSalvos);
-    });
+      setState(() {
+        dispositivos
+          ..clear()
+          ..addAll(dispositivosSalvos);
+      });
 
-    // Depois de carregar na tela, tenta recuperar a conexão BLE.
-    for (final dispositivo in dispositivosSalvos) {
-      await bluetooth.reconectarPorId(dispositivo.idBluetooth);
+      for (final dispositivo in dispositivosSalvos) {
+        try {
+          await bluetooth.reconectarPorId(dispositivo.idBluetooth);
+          monitorarConexao(dispositivo);
+        } catch (erro) {
+          debugPrint("Não foi possível reconectar ${dispositivo.nome}: $erro");
+        }
+      }
+    } catch (erro) {
+      debugPrint("Erro ao carregar dispositivos: $erro");
 
-      monitorarConexao(dispositivo);
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Não foi possível carregar os dispositivos salvos."),
+        ),
+      );
     }
   }
 
