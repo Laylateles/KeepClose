@@ -7,6 +7,8 @@ import 'dart:async';
 import '../modelo/usuario_modelo.dart';
 import '../../dados/banco_dados.dart';
 import 'dart:math';
+import '../alertas/tela_alerta_distancia.dart';
+import '../configuracao/tela_configuracoes_alerta.dart';
 
 //alterando o construtor para receber um usuário
 class TelaHome extends StatefulWidget {
@@ -20,11 +22,22 @@ class TelaHome extends StatefulWidget {
 
 class _TelaHomeState extends State<TelaHome> {
   final Map<String, List<int>> historicoRssi = {};
+  // Conta quantas leituras críticas consecutivas cada dispositivo teve.
+  final Map<String, int> contadorLeiturasCriticas = {};
   final Map<String, double> distancias = {};
+  // Guarda quais dispositivos já dispararam o alerta.
+  // Evita abrir várias telas de alerta ao mesmo tempo.
+  final Set<String> alertasConfirmados = {};
   final List<DispositivoModelo> dispositivos =
       []; //guarda temporariamente os nomes adicionados
   final BluetoothServiceKeepClose bluetooth =
       BluetoothServiceKeepClose.instancia;
+  // Guarda os dispositivos que já estão tentando reconectar.
+  // Evita iniciar duas reconexões ao mesmo tempo.
+  final Set<String> reconexoesEmAndamento = {};
+  // Guarda os dispositivos que já possuem
+  // um monitor de conexão ativo.
+  final Set<String> dispositivosMonitorados = {};
   Future<void> carregarDispositivos() async {
     try {
       final usuarioId = widget.usuario.id;
@@ -76,19 +89,72 @@ class _TelaHomeState extends State<TelaHome> {
   }
 
   String classificarSinal(int rssi) {
-    if (rssi >= -55) {
-      return "Muito próximo";
-    }
+  if (rssi >= -68) {
+    return "Muito próximo";
+  }
 
-    if (rssi >= -70) {
-      return "Próximo";
-    }
+  if (rssi >= -78) {
+    return "Próximo";
+  }
 
-    if (rssi >= -82) {
-      return "Distante";
-    }
+  if (rssi >= -85) {
+    return "Distante";
+  }
 
-    return "Crítico";
+  return "Crítico";
+}
+  void verificarSinalCritico(
+    DispositivoModelo dispositivo,
+    int rssi,
+  ) {
+    final idBluetooth = dispositivo.idBluetooth;
+
+    // Quantidade de leituras críticas necessárias
+    // para confirmar que o usuário está se afastando.
+    const int limiteLeiturasCriticas = 3;
+
+    // Abaixo de -85 dBm consideramos o sinal crítico.
+    if (rssi <= -85) {
+      contadorLeiturasCriticas[idBluetooth] =
+          (contadorLeiturasCriticas[idBluetooth] ?? 0) + 1;
+
+      final quantidade =
+          contadorLeiturasCriticas[idBluetooth]!;
+
+      print(
+        "LEITURA CRÍTICA ${dispositivo.nome}: "
+        "$quantidade/$limiteLeiturasCriticas | "
+        "RSSI=$rssi dBm",
+      );
+
+      if (quantidade >= limiteLeiturasCriticas &&
+          !alertasConfirmados.contains(idBluetooth)) {
+
+        alertasConfirmados.add(idBluetooth);
+
+        print(
+          "ATENÇÃO: sinal crítico confirmado "
+          "para ${dispositivo.nome}",
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TelaAlertaDistancia(
+              nomeDispositivo: dispositivo.nome,
+            ),
+          ),
+        );
+      }
+    } else {
+      contadorLeiturasCriticas[idBluetooth] = 0;
+
+      alertasConfirmados.remove(idBluetooth);
+    }
   }
 
   int suavizarRssi(String idBluetooth, int novoRssi) {
@@ -143,6 +209,11 @@ class _TelaHomeState extends State<TelaHome> {
 
     final distancia = calcularDistancia(rssiSuavizado);
 
+    verificarSinalCritico(
+      dispositivo,
+      rssiSuavizado,
+    );
+
     print(
       "RSSI ${dispositivo.nome}: "
       "bruto=$rssi | "
@@ -161,16 +232,38 @@ class _TelaHomeState extends State<TelaHome> {
     });
   }
 
-  void monitorarConexao(DispositivoModelo dispositivo) {
-    final stream = bluetooth.monitorarConexaoPorId(dispositivo.idBluetooth);
+  void monitorarConexao(
+    DispositivoModelo dispositivo,
+  ) {
+    final idBluetooth = dispositivo.idBluetooth;
 
-    if (stream == null) {
-      print("CONEXÃO: dispositivo não encontrado no serviço");
+    // Se já existe um monitor para este dispositivo,
+    // não criamos outro listener.
+    if (dispositivosMonitorados.contains(idBluetooth)) {
       return;
     }
 
+    final stream =
+        bluetooth.monitorarConexaoPorId(idBluetooth);
+
+    // O dispositivo pode ainda não ter sido encontrado
+    // pelo serviço Bluetooth.
+    if (stream == null) {
+      print(
+        "CONEXÃO: dispositivo ainda não disponível para monitoramento",
+      );
+
+      return;
+    }
+
+    // Só marcamos como monitorado depois que
+    // realmente conseguimos obter o stream.
+    dispositivosMonitorados.add(idBluetooth);
+
     stream.listen((conectado) {
-      print("CONEXÃO ${dispositivo.nome}: $conectado");
+      print(
+        "CONEXÃO ${dispositivo.nome}: $conectado",
+      );
 
       if (!mounted) {
         return;
@@ -181,9 +274,16 @@ class _TelaHomeState extends State<TelaHome> {
 
         if (!conectado) {
           dispositivo.rssi = null;
-          dispositivo.proximidade = "Fora de alcance";
+          dispositivo.proximidade =
+              "Fora de alcance";
 
-          historicoRssi.remove(dispositivo.idBluetooth);
+          historicoRssi.remove(
+            dispositivo.idBluetooth,
+          );
+
+          distancias.remove(
+            dispositivo.idBluetooth,
+          );
         }
       });
     });
@@ -200,17 +300,47 @@ class _TelaHomeState extends State<TelaHome> {
   }
 
   void iniciarMonitoramentoReconexao() {
-    timerReconexao = Timer.periodic(const Duration(seconds: 5), (timer) async {
-      for (final dispositivo in dispositivos) {
-        if (!dispositivo.conectado) {
-          print("Tentando reconectar automaticamente: ${dispositivo.nome}");
+    timerReconexao = Timer.periodic(
+      const Duration(seconds: 5),
+      (timer) async {
+        for (final dispositivo in dispositivos) {
+          final idBluetooth = dispositivo.idBluetooth;
 
-          await bluetooth.reconectarPorId(dispositivo.idBluetooth);
+          // Só tenta reconectar se:
+          // 1. o dispositivo estiver desconectado;
+          // 2. ainda não existir outra tentativa em andamento.
+          if (!dispositivo.conectado &&
+              !reconexoesEmAndamento.contains(idBluetooth)) {
 
-          monitorarConexao(dispositivo);
+            reconexoesEmAndamento.add(idBluetooth);
+
+            print(
+              "Tentando reconectar automaticamente: "
+              "${dispositivo.nome}",
+            );
+
+            try {
+              await bluetooth.reconectarPorId(
+                idBluetooth,
+              );
+
+              // Depois da tentativa de reconexão,
+              // tenta iniciar o monitor da conexão.
+              //
+              // Se já existir um monitor, o método
+              // simplesmente não cria outro.
+              monitorarConexao(dispositivo);
+            } finally {
+              // Quando a tentativa terminar,
+              // libera uma nova tentativa futura.
+              reconexoesEmAndamento.remove(
+                idBluetooth,
+              );
+            }
+          }
         }
-      }
-    });
+      },
+    );
   }
 
   @override
@@ -242,22 +372,43 @@ class _TelaHomeState extends State<TelaHome> {
             crossAxisAlignment: CrossAxisAlignment.start,
 
             children: [
-              const Row(
+              Row(
                 children: [
-                  Icon(
+                  const Icon(
                     Icons.location_on,
                     color: AppCores.roxoMeioTermo,
                     size: 38,
                   ),
 
-                  SizedBox(width: 8),
+                  const SizedBox(width: 8),
 
-                  Text(
+                  const Text(
                     "KeepClose",
                     style: TextStyle(
                       fontSize: 24,
                       fontWeight: FontWeight.bold,
                       color: AppCores.roxoMeioTermo,
+                    ),
+                  ),
+
+                  const Spacer(),
+
+                  // Abre a tela de configurações do alerta.
+                  IconButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) =>
+                              const TelaConfiguracoesAlerta(),
+                        ),
+                      );
+                    },
+
+                    icon: const Icon(
+                      Icons.settings_outlined,
+                      color: AppCores.roxoMeioTermo,
+                      size: 28,
                     ),
                   ),
                 ],
