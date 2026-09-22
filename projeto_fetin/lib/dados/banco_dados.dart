@@ -97,7 +97,7 @@ class BancoDados {
     await db.insert(
       'dispositivos',
       dispositivo.toMap(),
-      conflictAlgorithm: ConflictAlgorithm.replace,
+      conflictAlgorithm: ConflictAlgorithm.abort,
     );
   }
 
