@@ -26,41 +26,39 @@ class _TelaHomeState extends State<TelaHome> {
   final BluetoothServiceKeepClose bluetooth =
       BluetoothServiceKeepClose.instancia;
   Future<void> carregarDispositivos() async {
-  final usuarioId = widget.usuario.id;
+    final usuarioId = widget.usuario.id;
 
-  if (usuarioId == null) {
-    return;
+    if (usuarioId == null) {
+      return;
+    }
+
+    final dispositivosSalvos = await BancoDados.instancia
+        .buscarDispositivosDoUsuario(usuarioId);
+
+    // Estar salvo no banco não significa estar conectado agora.
+    for (final dispositivo in dispositivosSalvos) {
+      dispositivo.conectado = false;
+      dispositivo.rssi = null;
+      dispositivo.proximidade = "Fora de alcance";
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      dispositivos
+        ..clear()
+        ..addAll(dispositivosSalvos);
+    });
+
+    // Depois de carregar na tela, tenta recuperar a conexão BLE.
+    for (final dispositivo in dispositivosSalvos) {
+      await bluetooth.reconectarPorId(dispositivo.idBluetooth);
+
+      monitorarConexao(dispositivo);
+    }
   }
-
-  final dispositivosSalvos = await BancoDados.instancia
-      .buscarDispositivosDoUsuario(usuarioId);
-
-  // Estar salvo no banco não significa estar conectado agora.
-  for (final dispositivo in dispositivosSalvos) {
-    dispositivo.conectado = false;
-    dispositivo.rssi = null;
-    dispositivo.proximidade = "Fora de alcance";
-  }
-
-  if (!mounted) {
-    return;
-  }
-
-  setState(() {
-    dispositivos
-      ..clear()
-      ..addAll(dispositivosSalvos);
-  });
-
-  // Depois de carregar na tela, tenta recuperar a conexão BLE.
-  for (final dispositivo in dispositivosSalvos) {
-    await bluetooth.reconectarPorId(
-      dispositivo.idBluetooth,
-    );
-
-    monitorarConexao(dispositivo);
-  }
-}
 
   String classificarSinal(int rssi) {
     if (rssi >= -55) {
@@ -78,14 +76,8 @@ class _TelaHomeState extends State<TelaHome> {
     return "Crítico";
   }
 
-  int suavizarRssi(
-    String idBluetooth,
-    int novoRssi,
-  ) {
-    final historico = historicoRssi.putIfAbsent(
-      idBluetooth,
-      () => [],
-    );
+  int suavizarRssi(String idBluetooth, int novoRssi) {
+    final historico = historicoRssi.putIfAbsent(idBluetooth, () => []);
 
     historico.add(novoRssi);
 
@@ -94,81 +86,65 @@ class _TelaHomeState extends State<TelaHome> {
       historico.removeAt(0);
     }
 
-    final soma =
-        historico.reduce((a, b) => a + b);
+    final soma = historico.reduce((a, b) => a + b);
 
     return (soma / historico.length).round();
   }
 
   double calcularDistancia(int rssi) {
-  const double rssiReferencia = -72.0;
-  const double fatorAmbiente = 2.1;
+    const double rssiReferencia = -72.0;
+    const double fatorAmbiente = 2.1;
 
-  final expoente =
-      (rssiReferencia - rssi) /
-      (10 * fatorAmbiente);
+    final expoente = (rssiReferencia - rssi) / (10 * fatorAmbiente);
 
-  final distancia = pow(10, expoente);
+    final distancia = pow(10, expoente);
 
-  return distancia.toDouble();
-}
-
-  Future<void> atualizarRssi(
-  DispositivoModelo dispositivo,
-) async {
-  if (!dispositivo.conectado) {
-    return;
+    return distancia.toDouble();
   }
 
-  final rssi = await bluetooth.lerRssiPorId(
-    dispositivo.idBluetooth,
-  );
+  Future<void> atualizarRssi(DispositivoModelo dispositivo) async {
+    if (!dispositivo.conectado) {
+      return;
+    }
 
-  if (!mounted) {
-    return;
-  }
+    final rssi = await bluetooth.lerRssiPorId(dispositivo.idBluetooth);
 
-  if (rssi == null) {
+    if (!mounted) {
+      return;
+    }
+
+    if (rssi == null) {
+      setState(() {
+        dispositivo.rssi = null;
+        dispositivo.proximidade = "Aguardando sinal";
+
+        distancias.remove(dispositivo.idBluetooth);
+      });
+
+      return;
+    }
+
+    final rssiSuavizado = suavizarRssi(dispositivo.idBluetooth, rssi);
+
+    final distancia = calcularDistancia(rssiSuavizado);
+
+    print(
+      "RSSI ${dispositivo.nome}: "
+      "bruto=$rssi | "
+      "suavizado=$rssiSuavizado dBm | "
+      "distância=${distancia.toStringAsFixed(2)} m",
+    );
+
     setState(() {
-      dispositivo.rssi = null;
-      dispositivo.proximidade = "Aguardando sinal";
+      dispositivo.rssi = rssiSuavizado;
 
-      distancias.remove(
-        dispositivo.idBluetooth,
-      );
+      distancias[dispositivo.idBluetooth] = distancia;
+
+      dispositivo.proximidade = classificarSinal(rssiSuavizado);
+
+      dispositivo.ultimaConexao = "Agora";
     });
-
-    return;
   }
-
-  final rssiSuavizado = suavizarRssi(
-    dispositivo.idBluetooth,
-    rssi,
-  );
-
-  final distancia = calcularDistancia(
-    rssiSuavizado,
-  );
-
-  print(
-    "RSSI ${dispositivo.nome}: "
-    "bruto=$rssi | "
-    "suavizado=$rssiSuavizado dBm | "
-    "distância=${distancia.toStringAsFixed(2)} m",
-  );
-
-  setState(() {
-    dispositivo.rssi = rssiSuavizado;
-
-    distancias[dispositivo.idBluetooth] =
-        distancia;
-
-    dispositivo.proximidade =
-        classificarSinal(rssiSuavizado);
-
-    dispositivo.ultimaConexao = "Agora";
-  });
-}
 
   void monitorarConexao(DispositivoModelo dispositivo) {
     final stream = bluetooth.monitorarConexaoPorId(dispositivo.idBluetooth);
@@ -192,9 +168,7 @@ class _TelaHomeState extends State<TelaHome> {
           dispositivo.rssi = null;
           dispositivo.proximidade = "Fora de alcance";
 
-          historicoRssi.remove(
-            dispositivo.idBluetooth,
-          );
+          historicoRssi.remove(dispositivo.idBluetooth);
         }
       });
     });
@@ -211,31 +185,23 @@ class _TelaHomeState extends State<TelaHome> {
   }
 
   void iniciarMonitoramentoReconexao() {
-  timerReconexao = Timer.periodic(
-    const Duration(seconds: 5),
-    (timer) async {
+    timerReconexao = Timer.periodic(const Duration(seconds: 5), (timer) async {
       for (final dispositivo in dispositivos) {
         if (!dispositivo.conectado) {
-          print(
-            "Tentando reconectar automaticamente: ${dispositivo.nome}",
-          );
+          print("Tentando reconectar automaticamente: ${dispositivo.nome}");
 
-          await bluetooth.reconectarPorId(
-            dispositivo.idBluetooth,
-          );
+          await bluetooth.reconectarPorId(dispositivo.idBluetooth);
 
           monitorarConexao(dispositivo);
         }
       }
-    },
-  );
-}
+    });
+  }
 
   @override
   void initState() {
     super.initState();
     carregarDispositivos();
-
 
     iniciarMonitoramentoReconexao();
     iniciarMonitoramentoRssi();
@@ -414,12 +380,14 @@ class _TelaHomeState extends State<TelaHome> {
                                       const SizedBox(height: 10),
 
                                       Text(
-                                          dispositivo.conectado &&
-                                                  distancias[dispositivo.idBluetooth] != null
-                                              ? "Distância aproximada: "
-                                                "${distancias[dispositivo.idBluetooth]!.toStringAsFixed(2)} m"
-                                              : "Distância aproximada: Fora de alcance",
-                                        ),
+                                        dispositivo.conectado &&
+                                                distancias[dispositivo
+                                                        .idBluetooth] !=
+                                                    null
+                                            ? "Distância aproximada: "
+                                                  "${distancias[dispositivo.idBluetooth]!.toStringAsFixed(2)} m"
+                                            : "Distância aproximada: Fora de alcance",
+                                      ),
 
                                       const SizedBox(height: 6),
 
@@ -464,7 +432,33 @@ class _TelaHomeState extends State<TelaHome> {
 
                                             actions: [
                                               TextButton(
-                                                onPressed: () {
+                                                onPressed: () async {
+                                                  final novoNome = controller
+                                                      .text
+                                                      .trim();
+
+                                                  if (novoNome.isEmpty) {
+                                                    return;
+                                                  }
+
+                                                  await BancoDados.instancia
+                                                      .renomearDispositivo(
+                                                        idBluetooth: dispositivo
+                                                            .idBluetooth,
+                                                        usuarioId: dispositivo
+                                                            .usuarioId,
+                                                        novoNome: novoNome,
+                                                      );
+
+                                                  if (!mounted ||
+                                                      !context.mounted) {
+                                                    return;
+                                                  }
+
+                                                  setState(() {
+                                                    dispositivo.nome = novoNome;
+                                                  });
+
                                                   Navigator.pop(context);
                                                 },
                                                 child: const Text("Cancelar"),
@@ -513,10 +507,33 @@ class _TelaHomeState extends State<TelaHome> {
                                               ),
 
                                               TextButton(
-                                                onPressed: () {
+                                                onPressed: () async {
+                                                  await BancoDados.instancia
+                                                      .excluirDispositivo(
+                                                        idBluetooth: dispositivo
+                                                            .idBluetooth,
+                                                        usuarioId: dispositivo
+                                                            .usuarioId,
+                                                      );
+
+                                                  if (!mounted ||
+                                                      !context.mounted) {
+                                                    return;
+                                                  }
+
                                                   setState(() {
-                                                    dispositivos.removeAt(
-                                                      index,
+                                                    dispositivos.removeWhere(
+                                                      (item) =>
+                                                          item.idBluetooth ==
+                                                          dispositivo
+                                                              .idBluetooth,
+                                                    );
+
+                                                    historicoRssi.remove(
+                                                      dispositivo.idBluetooth,
+                                                    );
+                                                    distancias.remove(
+                                                      dispositivo.idBluetooth,
                                                     );
                                                   });
 

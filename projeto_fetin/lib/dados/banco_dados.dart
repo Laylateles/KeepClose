@@ -115,4 +115,32 @@ class BancoDados {
 
     return resultado.map((map) => DispositivoModelo.fromMap(map)).toList();
   }
+
+  Future<void> renomearDispositivo({
+    required String idBluetooth,
+    required int usuarioId,
+    required String novoNome,
+  }) async {
+    final db = await banco;
+
+    await db.update(
+      'dispositivos',
+      {'nome': novoNome},
+      where: 'id_bluetooth = ? AND usuario_id = ?',
+      whereArgs: [idBluetooth, usuarioId],
+    );
+  }
+
+  Future<void> excluirDispositivo({
+    required String idBluetooth,
+    required int usuarioId,
+  }) async {
+    final db = await banco;
+
+    await db.delete(
+      'dispositivos',
+      where: 'id_bluetooth = ? AND usuario_id = ?',
+      whereArgs: [idBluetooth, usuarioId],
+    );
+  }
 }
