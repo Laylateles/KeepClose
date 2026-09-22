@@ -92,7 +92,7 @@ class _TelaHomeState extends State<TelaHome> {
     const int limiteLeiturasCriticas = 3;
 
     // Abaixo de -85 dBm consideramos o sinal crítico.
-    if (rssi < -85) {
+    if (rssi <= -85) {
       contadorLeiturasCriticas[idBluetooth] =
           (contadorLeiturasCriticas[idBluetooth] ?? 0) + 1;
 

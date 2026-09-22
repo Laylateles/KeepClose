@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:vibration/vibration.dart';
 
-class TelaAlertaDistancia extends StatelessWidget {
+class TelaAlertaDistancia extends StatefulWidget {
   final String nomeDispositivo;
 
   const TelaAlertaDistancia({
@@ -9,15 +10,75 @@ class TelaAlertaDistancia extends StatelessWidget {
   });
 
   @override
+  State<TelaAlertaDistancia> createState() =>
+      _TelaAlertaDistanciaState();
+}
+
+class _TelaAlertaDistanciaState
+    extends State<TelaAlertaDistancia> {
+
+  @override
+  void initState() {
+    super.initState();
+
+    // Assim que a tela de alerta abrir,
+    // iniciamos a vibração.
+    iniciarVibracao();
+  }
+
+  Future<void> iniciarVibracao() async {
+    final possuiVibrador =
+        await Vibration.hasVibrator();
+
+    if (possuiVibrador) {
+      // Padrão:
+      // espera 0 ms
+      // vibra 700 ms
+      // pausa 500 ms
+      // vibra 700 ms
+      //
+      // repeat: 0 faz o padrão continuar
+      // até cancelarmos manualmente.
+      Vibration.vibrate(
+        pattern: [0, 700, 500, 700],
+        repeat: 0,
+      );
+    }
+  }
+
+  Future<void> pararAlerta() async {
+    // Interrompe imediatamente a vibração.
+    await Vibration.cancel();
+
+    if (!mounted) {
+      return;
+    }
+
+    // Fecha a tela de alerta.
+    Navigator.pop(context);
+  }
+
+  @override
+  void dispose() {
+    // Garante que a vibração também pare
+    // caso a tela seja fechada de outra forma.
+    Vibration.cancel();
+
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFB3261E),
+
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: 28,
             vertical: 32,
           ),
+
           child: Column(
             children: [
               const Spacer(),
@@ -53,7 +114,8 @@ class TelaAlertaDistancia extends StatelessWidget {
               const SizedBox(height: 18),
 
               Text(
-                "Você está se afastando de\n$nomeDispositivo",
+                "Você está se afastando de\n"
+                "${widget.nomeDispositivo}",
                 textAlign: TextAlign.center,
                 style: const TextStyle(
                   color: Colors.white,
@@ -66,7 +128,8 @@ class TelaAlertaDistancia extends StatelessWidget {
               const SizedBox(height: 18),
 
               const Text(
-                "O sinal Bluetooth atingiu uma região crítica.",
+                "O sinal Bluetooth atingiu "
+                "uma região crítica.",
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Colors.white70,
@@ -81,16 +144,18 @@ class TelaAlertaDistancia extends StatelessWidget {
                 width: double.infinity,
                 height: 58,
                 child: ElevatedButton(
-                  onPressed: () {
-                    Navigator.pop(context);
-                  },
+                  onPressed: pararAlerta,
+
                   style: ElevatedButton.styleFrom(
                     backgroundColor: Colors.white,
-                    foregroundColor: const Color(0xFFB3261E),
+                    foregroundColor:
+                        const Color(0xFFB3261E),
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(18),
+                      borderRadius:
+                          BorderRadius.circular(18),
                     ),
                   ),
+
                   child: const Text(
                     "DESATIVAR ALERTA",
                     style: TextStyle(
