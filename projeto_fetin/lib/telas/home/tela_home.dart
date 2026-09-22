@@ -7,6 +7,7 @@ import 'dart:async';
 import '../modelo/usuario_modelo.dart';
 import '../../dados/banco_dados.dart';
 import 'dart:math';
+import '../alertas/tela_alerta_distancia.dart';
 
 //alterando o construtor para receber um usuário
 class TelaHome extends StatefulWidget {
@@ -20,7 +21,12 @@ class TelaHome extends StatefulWidget {
 
 class _TelaHomeState extends State<TelaHome> {
   final Map<String, List<int>> historicoRssi = {};
+  // Conta quantas leituras críticas consecutivas cada dispositivo teve.
+  final Map<String, int> contadorLeiturasCriticas = {};
   final Map<String, double> distancias = {};
+  // Guarda quais dispositivos já dispararam o alerta.
+  // Evita abrir várias telas de alerta ao mesmo tempo.
+  final Set<String> alertasConfirmados = {};
   final List<DispositivoModelo> dispositivos =
       []; //guarda temporariamente os nomes adicionados
   final BluetoothServiceKeepClose bluetooth =
@@ -61,19 +67,72 @@ class _TelaHomeState extends State<TelaHome> {
   }
 
   String classificarSinal(int rssi) {
-    if (rssi >= -55) {
-      return "Muito próximo";
-    }
+  if (rssi >= -68) {
+    return "Muito próximo";
+  }
 
-    if (rssi >= -70) {
-      return "Próximo";
-    }
+  if (rssi >= -78) {
+    return "Próximo";
+  }
 
-    if (rssi >= -82) {
-      return "Distante";
-    }
+  if (rssi >= -85) {
+    return "Distante";
+  }
 
-    return "Crítico";
+  return "Crítico";
+}
+  void verificarSinalCritico(
+    DispositivoModelo dispositivo,
+    int rssi,
+  ) {
+    final idBluetooth = dispositivo.idBluetooth;
+
+    // Quantidade de leituras críticas necessárias
+    // para confirmar que o usuário está se afastando.
+    const int limiteLeiturasCriticas = 3;
+
+    // Abaixo de -85 dBm consideramos o sinal crítico.
+    if (rssi < -85) {
+      contadorLeiturasCriticas[idBluetooth] =
+          (contadorLeiturasCriticas[idBluetooth] ?? 0) + 1;
+
+      final quantidade =
+          contadorLeiturasCriticas[idBluetooth]!;
+
+      print(
+        "LEITURA CRÍTICA ${dispositivo.nome}: "
+        "$quantidade/$limiteLeiturasCriticas | "
+        "RSSI=$rssi dBm",
+      );
+
+      if (quantidade >= limiteLeiturasCriticas &&
+          !alertasConfirmados.contains(idBluetooth)) {
+
+        alertasConfirmados.add(idBluetooth);
+
+        print(
+          "ATENÇÃO: sinal crítico confirmado "
+          "para ${dispositivo.nome}",
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => TelaAlertaDistancia(
+              nomeDispositivo: dispositivo.nome,
+            ),
+          ),
+        );
+      }
+    } else {
+      contadorLeiturasCriticas[idBluetooth] = 0;
+
+      alertasConfirmados.remove(idBluetooth);
+    }
   }
 
   int suavizarRssi(String idBluetooth, int novoRssi) {
@@ -127,6 +186,11 @@ class _TelaHomeState extends State<TelaHome> {
     final rssiSuavizado = suavizarRssi(dispositivo.idBluetooth, rssi);
 
     final distancia = calcularDistancia(rssiSuavizado);
+
+    verificarSinalCritico(
+      dispositivo,
+      rssiSuavizado,
+    );
 
     print(
       "RSSI ${dispositivo.nome}: "
