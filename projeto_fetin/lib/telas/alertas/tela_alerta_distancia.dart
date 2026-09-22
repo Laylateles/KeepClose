@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:vibration/vibration.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 class TelaAlertaDistancia extends StatefulWidget {
   final String nomeDispositivo;
@@ -17,38 +18,56 @@ class TelaAlertaDistancia extends StatefulWidget {
 class _TelaAlertaDistanciaState
     extends State<TelaAlertaDistancia> {
 
+  // Player responsável pelo som do alerta.
+  final AudioPlayer audioPlayer = AudioPlayer();
+
   @override
   void initState() {
     super.initState();
 
-    // Assim que a tela de alerta abrir,
-    // iniciamos a vibração.
-    iniciarVibracao();
+    // Quando a tela abrir, inicia o alerta.
+    iniciarAlerta();
   }
 
-  Future<void> iniciarVibracao() async {
+  Future<void> iniciarAlerta() async {
+    // -------------------------
+    // VIBRAÇÃO
+    // -------------------------
+
     final possuiVibrador =
         await Vibration.hasVibrator();
 
     if (possuiVibrador) {
-      // Padrão:
-      // espera 0 ms
-      // vibra 700 ms
-      // pausa 500 ms
-      // vibra 700 ms
-      //
-      // repeat: 0 faz o padrão continuar
-      // até cancelarmos manualmente.
       Vibration.vibrate(
         pattern: [0, 700, 500, 700],
         repeat: 0,
       );
     }
+
+    // -------------------------
+    // SOM
+    // -------------------------
+
+    // Faz o áudio repetir continuamente.
+    await audioPlayer.setReleaseMode(
+      ReleaseMode.loop,
+    );
+
+    // Toca o arquivo que está dentro de:
+    // assets/audios/alerta_keepclose.wav
+    await audioPlayer.play(
+      AssetSource(
+        'audios/alerta_keepclose.wav',
+      ),
+    );
   }
 
   Future<void> pararAlerta() async {
-    // Interrompe imediatamente a vibração.
+    // Para a vibração.
     await Vibration.cancel();
+
+    // Para o som.
+    await audioPlayer.stop();
 
     if (!mounted) {
       return;
@@ -60,9 +79,13 @@ class _TelaAlertaDistanciaState
 
   @override
   void dispose() {
-    // Garante que a vibração também pare
-    // caso a tela seja fechada de outra forma.
+    // Segurança:
+    // se a tela for fechada de outra forma,
+    // som e vibração também são interrompidos.
     Vibration.cancel();
+
+    audioPlayer.stop();
+    audioPlayer.dispose();
 
     super.dispose();
   }
